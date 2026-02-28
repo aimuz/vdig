@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+        exclude:
+          - goos: windows
+            goarch: arm64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          BINARY_NAME=vdig
+          if [ "$GOOS" = "windows" ]; then
+            BINARY_NAME=vdig.exe
+          fi
+          go build -ldflags="-s -w" -o "$BINARY_NAME" .
+
+      - name: Create archive
+        id: archive
+        run: |
+          BINARY_NAME=vdig
+          ARCHIVE_NAME=vdig-${{ matrix.goos }}-${{ matrix.goarch }}
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            BINARY_NAME=vdig.exe
+            ARCHIVE_NAME="${ARCHIVE_NAME}.zip"
+            zip "$ARCHIVE_NAME" "$BINARY_NAME"
+          else
+            ARCHIVE_NAME="${ARCHIVE_NAME}.tar.gz"
+            tar -czvf "$ARCHIVE_NAME" "$BINARY_NAME"
+          fi
+          echo "archive_name=$ARCHIVE_NAME" >> $GITHUB_OUTPUT
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.archive.outputs.archive_name }}
+          path: ${{ steps.archive.outputs.archive_name }}
+          retention-days: 1
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Display structure of downloaded files
+        run: ls -la dist/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  homebrew:
+    name: Update Homebrew Formula
+    needs: release
+    runs-on: ubuntu-latest
+    if: github.repository_owner == 'aimuz'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Update Homebrew tap
+        run: |
+          echo "Version: ${{ steps.version.outputs.VERSION }}"
+          echo "TODO: Update homebrew tap repository if exists"
+        # Uncomment and modify when you have a homebrew tap
+        # env:
+        #   GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
